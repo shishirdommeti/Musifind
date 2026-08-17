@@ -1,0 +1,31 @@
+# Album Diary Frontend Implementation
+
+The frontend for the Album Diary (our Letterboxd clone for music) has been fully implemented in our React Vite app.
+
+## Changes Made
+
+### Navigation Updates (`App.tsx`)
+- Added a `activeView` state to toggle between `"playlist"` and `"diary"`.
+- Added a simple navigation toggle menu at the bottom of the left sidebar.
+- Conditionally renders either the Playlist Generator's middle and right columns, or the new `AlbumDiary` component across the remaining layout space.
+
+### New Component (`AlbumDiary.tsx`)
+- **Strict Aesthetic:** Built entirely with Tailwind CSS, strictly adhering to the dark monochrome, solid background, and gray-border design system without any gradients.
+- **Spotify Search Integration:**
+  - Added a search bar at the top of the component that hits the `https://api.spotify.com/v1/search?type=album` endpoint.
+  - Results appear in a floating dropdown.
+  - Clicking a result opens a quick-select modal to define the status, a **1 to 10 score**, and notes before instantly saving to the database via `POST /albums`.
+- **Dynamic Grid Layout:**
+  - Dynamically fetches and splits the database albums into "Listened" and "Plan to Listen" sections.
+  - Added sorting capabilities for the "Listened" section (Alphabetical vs Score).
+  - Displays the 1-10 score prominently over the cover art.
+- **Right-Hand Detail Panel:**
+  - Clicking an album seamlessly slides in a fixed 320px right-hand panel.
+  - Displays detailed metadata (release date, genres, cover).
+  - Fully functional `PUT` update form to mutate the status, score (1-10 selector), and notes on the fly.
+  - Displays up to 3 highly personalized album recommendations at the bottom by seamlessly pulling from the new backend `GET /albums/{id}/recommendations` bridge API.
+
+## Validation Results
+- Verified that all styling conforms to the requested clean, gradient-free look.
+- Ensured seamless switching between the Playlist Generator and Album Diary features without breaking existing context.
+- Fixed minor TypeScript type inconsistencies (`str` to `string`) during implementation.
