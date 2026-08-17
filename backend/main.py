@@ -2,7 +2,8 @@ import os
 import urllib.parse
 import requests
 import random
-from pydantic import BaseModel
+import datetime
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, HTTPException, Response, BackgroundTasks, Depends
 from fastapi.responses import RedirectResponse
@@ -10,7 +11,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
 import models
-import services
 from database import engine, get_db
 
 models.Base.metadata.create_all(bind=engine)
@@ -176,9 +176,6 @@ def timeline(request: Request, background_tasks: BackgroundTasks, db: Session = 
         seconds = (duration_ms % 60000) // 1000
         duration = f"{minutes}:{seconds:02d}"
         
-        if artist_id:
-            background_tasks.add_task(services.process_track_gamification, db, user_id, artist_id, token)
-        
         cleaned_data.append({
             "id": track_id,
             "songTitle": song_title,
@@ -317,87 +314,154 @@ async def generate_playlist(request: Request):
         print(f"CRITICAL ERROR: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/debug/profile")
-def debug_profile(request: Request, db: Session = Depends(get_db)):
+def get_current_user(request: Request, db: Session):
     auth_header = request.headers.get("Authorization")
-    user = None
-    if auth_header and auth_header.startswith("Bearer "):
-        token = auth_header.split(" ")[1]
-        headers = {"Authorization": f"Bearer {token}"}
-        user_response = requests.get("https://api.spotify.com/v1/me", headers=headers)
-        if user_response.status_code == 200:
-            spotify_id = user_response.json().get("id")
-            user = db.query(models.User).filter(models.User.spotify_id == spotify_id).first()
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid authorization header")
+    
+    token = auth_header.split(" ")[1]
+    headers = {"Authorization": f"Bearer {token}"}
+    
+    me_response = requests.get("https://api.spotify.com/v1/me", headers=headers)
+    if me_response.status_code != 200:
+        raise HTTPException(status_code=me_response.status_code, detail="Failed to fetch user from Spotify")
+        
+    me_data = me_response.json()
+    spotify_id = me_data.get("id")
+    display_name = me_data.get("display_name")
+    
+    user = db.query(models.User).filter(models.User.spotify_id == spotify_id).first()
+    if not user:
+        user = models.User(spotify_id=spotify_id, display_name=display_name)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    
+    # Store token on the user object dynamically for routes that need it
+    user.spotify_token = token
+    return user
+
+
+class AlbumRequest(BaseModel):
+    spotify_album_id: str
+    title: str
+    artist: str
+    cover_image_url: str
+    release_date: str
+    genres: str
+    status: str
+    score: int = Field(ge=1, le=10)
+    notes: str
+
+class AlbumUpdateRequest(BaseModel):
+    status: str
+    score: int = Field(ge=1, le=10)
+    notes: str
+
+
+@app.post("/albums")
+def create_album(request: Request, payload: AlbumRequest, db: Session = Depends(get_db)):
+    user = get_current_user(request, db)
+    
+    album = models.SavedAlbum(
+        user_id=user.id,
+        spotify_album_id=payload.spotify_album_id,
+        title=payload.title,
+        artist=payload.artist,
+        cover_image_url=payload.cover_image_url,
+        release_date=payload.release_date,
+        genres=payload.genres,
+        status=payload.status,
+        score=payload.score,
+        notes=payload.notes,
+        added_at=datetime.datetime.utcnow()
+    )
+    db.add(album)
+    db.commit()
+    db.refresh(album)
+    return album
+
+
+@app.get("/albums")
+def get_albums(request: Request, db: Session = Depends(get_db)):
+    user = get_current_user(request, db)
+    return db.query(models.SavedAlbum).filter(models.SavedAlbum.user_id == user.id).all()
+
+
+@app.put("/albums/{album_id}")
+def update_album(album_id: int, request: Request, payload: AlbumUpdateRequest, db: Session = Depends(get_db)):
+    user = get_current_user(request, db)
+    album = db.query(models.SavedAlbum).filter(
+        models.SavedAlbum.id == album_id,
+        models.SavedAlbum.user_id == user.id
+    ).first()
+    
+    if not album:
+        raise HTTPException(status_code=404, detail="Album not found")
+        
+    album.status = payload.status
+    album.score = payload.score
+    album.notes = payload.notes
+    
+    db.commit()
+    db.refresh(album)
+    return album
+
+
+@app.delete("/albums/{album_id}")
+def delete_album(album_id: int, request: Request, db: Session = Depends(get_db)):
+    user = get_current_user(request, db)
+    album = db.query(models.SavedAlbum).filter(
+        models.SavedAlbum.id == album_id,
+        models.SavedAlbum.user_id == user.id
+    ).first()
+    
+    if not album:
+        raise HTTPException(status_code=404, detail="Album not found")
+        
+    db.delete(album)
+    db.commit()
+    return {"message": "Album deleted"}
+
+
+@app.get("/albums/{spotify_album_id}/recommendations")
+def get_album_recommendations(spotify_album_id: str, request: Request, db: Session = Depends(get_db)):
+    user = get_current_user(request, db)
+    headers = {"Authorization": f"Bearer {user.spotify_token}"}
+    
+    try:
+        # 1. Get artist from album
+        album_res = requests.get(f"https://api.spotify.com/v1/albums/{spotify_album_id}", headers=headers)
+        if album_res.status_code != 200:
+            raise HTTPException(status_code=400, detail="Failed to fetch album details")
             
-    if not user:
-        user = db.query(models.User).first()
-
-    if not user:
-        return {
-            "overall_breadth_score": 0,
-            "total_genres_discovered": 0,
-            "genre_profiles": [],
-            "genres": []
-        }
-
-    global_profile = db.query(models.GlobalMusicProfile).filter(models.GlobalMusicProfile.user_id == user.id).first()
-    genre_profiles = db.query(models.GenreDepthProfile).filter(models.GenreDepthProfile.user_id == user.id).all()
-
-    genres_list = [
-        {
-            "id": gp.id,
-            "genre_name": gp.genre_name,
-            "depth_score": gp.depth_score,
-            "track_count": gp.track_count,
-            "first_discovered_at": gp.first_discovered_at.isoformat() if gp.first_discovered_at else None
-        }
-        for gp in genre_profiles
-    ]
-
-    if not global_profile:
-        return {
-            "overall_breadth_score": 0,
-            "total_genres_discovered": 0,
-            "genre_profiles": genres_list,
-            "genres": genres_list
-        }
-
-    return {
-        "overall_breadth_score": global_profile.overall_breadth_score or 0,
-        "total_genres_discovered": global_profile.total_genres_discovered or 0,
-        "genre_profiles": genres_list,
-        "genres": genres_list
-    }
-
-
-@app.get("/debug/db")
-def debug_db(db: Session = Depends(get_db)):
-    tracks = db.query(models.TrackHistory).order_by(models.TrackHistory.id.desc()).limit(10).all()
-    genres = db.query(models.GenreDepthProfile).all()
-
-    serialized_tracks = [
-        {
-            "id": track.id,
-            "user_id": track.user_id,
-            "spotify_track_id": track.spotify_track_id,
-            "played_at": track.played_at.isoformat() if track.played_at else None,
-        }
-        for track in tracks
-    ]
-
-    serialized_genres = [
-        {
-            "id": genre.id,
-            "user_id": genre.user_id,
-            "genre_name": genre.genre_name,
-            "depth_score": genre.depth_score,
-            "track_count": genre.track_count,
-            "first_discovered_at": genre.first_discovered_at.isoformat() if genre.first_discovered_at else None,
-        }
-        for genre in genres
-    ]
-
-    return {
-        "tracks": serialized_tracks,
-        "genres": serialized_genres
-    }
+        album_data = album_res.json()
+        artists = album_data.get("artists", [])
+        if not artists:
+            raise HTTPException(status_code=400, detail="No artists found for album")
+            
+        artist_id = artists[0].get("id")
+        
+        # 2. Get related artists
+        related_res = requests.get(f"https://api.spotify.com/v1/artists/{artist_id}/related-artists", headers=headers)
+        if related_res.status_code != 200:
+            raise HTTPException(status_code=400, detail="Failed to fetch related artists")
+            
+        related_data = related_res.json()
+        top_3_related = related_data.get("artists", [])[:3]
+        
+        # 3. Get 1 album for each related artist
+        recommended_albums = []
+        for related_artist in top_3_related:
+            r_artist_id = related_artist.get("id")
+            albums_res = requests.get(f"https://api.spotify.com/v1/artists/{r_artist_id}/albums?limit=1", headers=headers)
+            if albums_res.status_code == 200:
+                albums_data = albums_res.json().get("items", [])
+                if albums_data:
+                    recommended_albums.append(albums_data[0])
+                    
+        return recommended_albums
+        
+    except Exception as e:
+        print(f"RECOMMENDATION ERROR: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
