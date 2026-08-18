@@ -160,7 +160,7 @@ export default function App() {
                 activeView === "diary" ? "bg-[#1a1a1a] text-white font-medium border border-[#2a2a2a]" : "text-[#6b6b6b] hover:text-[#b3b3b3] hover:bg-[#161616] border border-transparent"
               }`}
             >
-              Album Diary
+              My Album List
             </button>
           </div>
         </aside>

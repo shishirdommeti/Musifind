@@ -448,10 +448,15 @@ def get_album_recommendations(spotify_album_id: str, request: Request, db: Sessi
         if not album:
             raise HTTPException(status_code=404, detail="Album not found in diary")
             
+        # Get all user's saved album titles (lowercased) for deduplication
+        user_albums = db.query(models.SavedAlbum).filter(models.SavedAlbum.user_id == user.id).all()
+        saved_titles = {a.title.lower() for a in user_albums if a.title}
+            
         artist_name_encoded = urllib.parse.quote(album.artist)
         lastfm_key = os.getenv("LASTFM_API_KEY")
         
-        related_res = requests.get(f"http://ws.audioscrobbler.com/2.0/?method=artist.getsimilar&artist={artist_name_encoded}&api_key={lastfm_key}&format=json&limit=3")
+        # Request more similar artists to account for skipped ones
+        related_res = requests.get(f"http://ws.audioscrobbler.com/2.0/?method=artist.getsimilar&artist={artist_name_encoded}&api_key={lastfm_key}&format=json&limit=15")
         if related_res.status_code != 200:
             print(f"LASTFM RELATED ERROR: {related_res.text}")
             raise HTTPException(status_code=related_res.status_code, detail="Failed to fetch related artists from Last.fm")
@@ -461,19 +466,31 @@ def get_album_recommendations(spotify_album_id: str, request: Request, db: Sessi
         
         recommended_albums = []
         for sim in similar_artists:
+            if len(recommended_albums) >= 3:
+                break
+                
             sim_artist_name = urllib.parse.quote(sim.get("name"))
-            al_res = requests.get(f"http://ws.audioscrobbler.com/2.0/?method=artist.gettopalbums&artist={sim_artist_name}&api_key={lastfm_key}&format=json&limit=1")
+            # Get a few top albums per artist in case their #1 is already saved
+            al_res = requests.get(f"http://ws.audioscrobbler.com/2.0/?method=artist.gettopalbums&artist={sim_artist_name}&api_key={lastfm_key}&format=json&limit=5")
+            
             if al_res.status_code == 200:
                 albums = al_res.json().get("topalbums", {}).get("album", [])
-                if albums:
-                    al = albums[0]
+                
+                # Find the first valid, un-saved album from this artist
+                for al in albums:
+                    al_name = al.get("name", "")
+                    if not al_name or al_name.lower() in saved_titles:
+                        continue
+                        
                     images = [{"url": img["#text"]} for img in al.get("image", []) if img.get("#text")]
                     if images:
                         recommended_albums.append({
-                            "id": al.get("mbid") or al.get("name"),
-                            "name": al.get("name"),
+                            "id": al.get("mbid") or al_name,
+                            "name": al_name,
                             "images": images
                         })
+                        saved_titles.add(al_name.lower()) # Prevent duplicate recommendations in this batch
+                        break # Only 1 album per similar artist for diversity
                         
         return recommended_albums
         
