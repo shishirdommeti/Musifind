@@ -135,7 +135,7 @@ export default function AlbumDiary() {
           release_date: selectedSearchAlbum.release_date || "",
           genres: "", // Simplify for now
           status: addStatus,
-          score: addStatus === "listened" ? addScore : 0,
+          score: addStatus === "listened" ? addScore : null,
           notes: addNotes
         })
       });
@@ -179,7 +179,7 @@ export default function AlbumDiary() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           status: editStatus,
-          score: editStatus === "listened" ? editScore : 0,
+          score: editStatus === "listened" ? editScore : null,
           notes: editNotes
         })
       });

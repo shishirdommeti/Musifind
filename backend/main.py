@@ -3,6 +3,7 @@ import urllib.parse
 import requests
 import random
 import datetime
+from typing import Optional
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, HTTPException, Response, BackgroundTasks, Depends
@@ -314,12 +315,21 @@ async def generate_playlist(request: Request):
         print(f"CRITICAL ERROR: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+TOKEN_CACHE = {}
+
 def get_current_user(request: Request, db: Session):
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid authorization header")
     
     token = auth_header.split(" ")[1]
+    
+    if token in TOKEN_CACHE:
+        user = db.query(models.User).filter(models.User.id == TOKEN_CACHE[token]).first()
+        if user:
+            user.spotify_token = token
+            return user
+            
     headers = {"Authorization": f"Bearer {token}"}
     
     me_response = requests.get("https://api.spotify.com/v1/me", headers=headers)
@@ -339,6 +349,7 @@ def get_current_user(request: Request, db: Session):
     
     # Store token on the user object dynamically for routes that need it
     user.spotify_token = token
+    TOKEN_CACHE[token] = user.id
     return user
 
 
@@ -350,13 +361,13 @@ class AlbumRequest(BaseModel):
     release_date: str
     genres: str
     status: str
-    score: int = Field(ge=1, le=10)
-    notes: str
+    score: Optional[int] = Field(default=None, ge=1, le=10)
+    notes: Optional[str] = None
 
 class AlbumUpdateRequest(BaseModel):
     status: str
-    score: int = Field(ge=1, le=10)
-    notes: str
+    score: Optional[int] = Field(default=None, ge=1, le=10)
+    notes: Optional[str] = None
 
 
 @app.post("/albums")
@@ -427,41 +438,47 @@ def delete_album(album_id: int, request: Request, db: Session = Depends(get_db))
 @app.get("/albums/{spotify_album_id}/recommendations")
 def get_album_recommendations(spotify_album_id: str, request: Request, db: Session = Depends(get_db)):
     user = get_current_user(request, db)
-    headers = {"Authorization": f"Bearer {user.spotify_token}"}
     
     try:
-        # 1. Get artist from album
-        album_res = requests.get(f"https://api.spotify.com/v1/albums/{spotify_album_id}", headers=headers)
-        if album_res.status_code != 200:
-            raise HTTPException(status_code=400, detail="Failed to fetch album details")
-            
-        album_data = album_res.json()
-        artists = album_data.get("artists", [])
-        if not artists:
-            raise HTTPException(status_code=400, detail="No artists found for album")
-            
-        artist_id = artists[0].get("id")
+        album = db.query(models.SavedAlbum).filter(
+            models.SavedAlbum.spotify_album_id == spotify_album_id,
+            models.SavedAlbum.user_id == user.id
+        ).first()
         
-        # 2. Get related artists
-        related_res = requests.get(f"https://api.spotify.com/v1/artists/{artist_id}/related-artists", headers=headers)
+        if not album:
+            raise HTTPException(status_code=404, detail="Album not found in diary")
+            
+        artist_name_encoded = urllib.parse.quote(album.artist)
+        lastfm_key = os.getenv("LASTFM_API_KEY")
+        
+        related_res = requests.get(f"http://ws.audioscrobbler.com/2.0/?method=artist.getsimilar&artist={artist_name_encoded}&api_key={lastfm_key}&format=json&limit=3")
         if related_res.status_code != 200:
-            raise HTTPException(status_code=400, detail="Failed to fetch related artists")
+            print(f"LASTFM RELATED ERROR: {related_res.text}")
+            raise HTTPException(status_code=related_res.status_code, detail="Failed to fetch related artists from Last.fm")
             
         related_data = related_res.json()
-        top_3_related = related_data.get("artists", [])[:3]
+        similar_artists = related_data.get("similarartists", {}).get("artist", [])
         
-        # 3. Get 1 album for each related artist
         recommended_albums = []
-        for related_artist in top_3_related:
-            r_artist_id = related_artist.get("id")
-            albums_res = requests.get(f"https://api.spotify.com/v1/artists/{r_artist_id}/albums?limit=1", headers=headers)
-            if albums_res.status_code == 200:
-                albums_data = albums_res.json().get("items", [])
-                if albums_data:
-                    recommended_albums.append(albums_data[0])
-                    
+        for sim in similar_artists:
+            sim_artist_name = urllib.parse.quote(sim.get("name"))
+            al_res = requests.get(f"http://ws.audioscrobbler.com/2.0/?method=artist.gettopalbums&artist={sim_artist_name}&api_key={lastfm_key}&format=json&limit=1")
+            if al_res.status_code == 200:
+                albums = al_res.json().get("topalbums", {}).get("album", [])
+                if albums:
+                    al = albums[0]
+                    images = [{"url": img["#text"]} for img in al.get("image", []) if img.get("#text")]
+                    if images:
+                        recommended_albums.append({
+                            "id": al.get("mbid") or al.get("name"),
+                            "name": al.get("name"),
+                            "images": images
+                        })
+                        
         return recommended_albums
         
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"RECOMMENDATION ERROR: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
