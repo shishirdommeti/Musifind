@@ -394,7 +394,7 @@ export default function AlbumDiary() {
 
       {/* Right Detail Panel */}
       <div
-        className={`absolute top-0 right-0 h-full w-[320px] bg-[#0a0a0a] border-l border-[#1e1e1e] flex flex-col transition-transform duration-300 z-30 shadow-2xl ${panelAlbum ? "translate-x-0" : "translate-x-full"}`}
+        className={`absolute top-0 right-0 h-full w-[320px] bg-[#181818] border-l border-[#1e1e1e] flex flex-col transition-transform duration-300 z-30 shadow-2xl ${panelAlbum ? "translate-x-0" : "translate-x-full"}`}
       >
         {panelAlbum && (
           <>
