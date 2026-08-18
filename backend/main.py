@@ -483,10 +483,23 @@ def get_album_recommendations(spotify_album_id: str, request: Request, db: Sessi
                         continue
                         
                     images = [{"url": img["#text"]} for img in al.get("image", []) if img.get("#text")]
+                    
+                    release_date = ""
+                    al_info_res = requests.get(f"http://ws.audioscrobbler.com/2.0/?method=album.getinfo&api_key={lastfm_key}&artist={sim_artist_name}&album={urllib.parse.quote(al_name)}&format=json")
+                    if al_info_res.status_code == 200:
+                        published = al_info_res.json().get("album", {}).get("wiki", {}).get("published", "")
+                        if published:
+                            import re
+                            match = re.search(r'\b(19|20)\d{2}\b', published)
+                            if match:
+                                release_date = match.group(0)
+
                     if images:
                         recommended_albums.append({
                             "id": al.get("mbid") or al_name,
                             "name": al_name,
+                            "artist": sim.get("name"),
+                            "release_date": release_date,
                             "images": images
                         })
                         saved_titles.add(al_name.lower()) # Prevent duplicate recommendations in this batch

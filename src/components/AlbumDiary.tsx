@@ -22,6 +22,7 @@ interface RecAlbum {
   id: string; // mbid or name — not a DB id
   name: string;
   artist?: string;
+  release_date?: string;
   images: { url: string }[];
 }
 
@@ -278,7 +279,7 @@ export default function AlbumDiary() {
     : panelAlbum?.rec.images[panelAlbum.rec.images.length - 1]?.url || "";
   const panelTitle = panelAlbum?.kind === "saved" ? panelAlbum.album.title : panelAlbum?.rec.name;
   const panelArtist = panelAlbum?.kind === "saved" ? panelAlbum.album.artist : panelAlbum?.rec.artist;
-  const panelDate = panelAlbum?.kind === "saved" ? panelAlbum.album.release_date : null;
+  const panelDate = panelAlbum?.kind === "saved" ? panelAlbum.album.release_date : panelAlbum?.rec.release_date;
   const isSavedPanel = panelAlbum?.kind === "saved";
 
   const listened = albums.filter(a => a.status === "listened").sort((a, b) => {
@@ -412,10 +413,7 @@ export default function AlbumDiary() {
                 <img src={panelCover} className="w-full aspect-square object-cover rounded border border-[#1e1e1e] mb-4 shadow-lg" alt="" />
                 <h2 className="text-xl font-bold text-white mb-1 leading-tight">{panelTitle}</h2>
                 {panelArtist && <p className="text-sm text-[#b3b3b3]">{panelArtist}</p>}
-                {panelDate && <p className="text-xs text-[#4a4a4a] mt-1">Released {panelDate}</p>}
-                {!isSavedPanel && (
-                  <p className="text-xs text-[#4a4a4a] mt-2 italic">Not yet in your diary</p>
-                )}
+                {panelDate && <p className="text-xs text-[#4a4a4a] mt-1">{panelDate.slice(0, 4)}</p>}
               </div>
 
               {/* Edit / Add Form */}
@@ -480,7 +478,7 @@ export default function AlbumDiary() {
                       disabled={isSaving}
                       className="w-full bg-[#1a1a1a] border border-[#2a2a2a] hover:bg-[#222] text-white text-sm font-semibold py-2 rounded transition-colors disabled:opacity-50"
                     >
-                      {isSaving ? "Adding..." : "Add to Diary"}
+                      {isSaving ? "Adding..." : "Add to List"}
                     </button>
                   )}
                 </div>
@@ -511,9 +509,16 @@ export default function AlbumDiary() {
                               className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
                             />
                           </div>
-                          <p className="text-[10px] text-[#6b6b6b] group-hover:text-[#b3b3b3] transition-colors truncate w-full text-left leading-tight">
-                            {rec.name}
-                          </p>
+                          <div className="w-full text-left mt-1">
+                            <p className="text-[11px] font-medium text-white group-hover:text-[#b3b3b3] transition-colors truncate w-full leading-tight">
+                              {rec.name}
+                            </p>
+                            {rec.artist && (
+                              <p className="text-[10px] text-[#6b6b6b] truncate w-full">
+                                {rec.artist}
+                              </p>
+                            )}
+                          </div>
                         </button>
                       ))}
                     </div>
